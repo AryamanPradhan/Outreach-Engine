@@ -7,7 +7,7 @@
     "deploy": "npx trigger.dev@latest deploy"
   },
   "dependencies": {
-    "@trigger.dev/sdk": "^4.4.6",
+    "@trigger.dev/sdk": "4.4.6",
     "dotenv": "^16.4.0",
     "googleapis": "^140.0.0",
     "nodemailer": "^6.9.0",
