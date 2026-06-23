@@ -44,21 +44,22 @@ export async function findWebsiteEmails(domain: string): Promise<string[]> {
   const host = domain.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").trim();
   if (!host) return [];
 
-  // Try homepage first, then contact page — contact page is where emails usually live.
+  // Homepage + likely contact pages. Scraped concurrently so the worst-case
+  // scrape time is a single 10s timeout, not three back-to-back (~30s). The
+  // old sequential early-exit is moot under parallelism — we always get all
+  // results within one timeout window.
   const pagesToTry = [
     `https://${host}`,
     `https://${host}/contact`,
     `https://${host}/contact-us`,
   ];
 
-  const allEmails = new Set<string>();
+  const contents = await Promise.all(pagesToTry.map(scrapePage));
 
-  for (const url of pagesToTry) {
-    const content = await scrapePage(url);
+  const allEmails = new Set<string>();
+  for (const content of contents) {
     const found = (content.match(EMAIL_RE) ?? []).map((e) => e.toLowerCase()).filter((e) => !isJunkEmail(e));
     found.forEach((e) => allEmails.add(e));
-    // Stop early if we already found same-domain emails.
-    if ([...allEmails].some((e) => e.endsWith(`@${host}`))) break;
   }
 
   // Only return same-domain emails — avoids BCC-ing unrelated third parties.

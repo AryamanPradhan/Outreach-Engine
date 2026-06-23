@@ -5,10 +5,18 @@ import { findWebsiteEmails } from "../lib/firecrawl";
 import { sendEmail } from "../lib/mailer";
 
 const MAX_ATTEMPTS = 2;
-const DELAY_MS = 30_000; // 30s between sends keeps each run under 15 min (free tier cap)
+// Jittered delay between sends. Kept short enough that a full batch (plus
+// per-lead scrape + generation time) stays under the 15 min maxDuration, but
+// long enough — and randomized, to avoid a robotic cadence — that Gmail does
+// not flag the run as spam at this low volume (~11 sends/run, 22/day).
+const DELAY_MIN_MS = 15_000;
+const DELAY_MAX_MS = 25_000;
+const sendDelayMs = () =>
+  DELAY_MIN_MS + Math.floor(Math.random() * (DELAY_MAX_MS - DELAY_MIN_MS));
 
-// MAX_EMAILS_PER_RUN is the daily cap. Two runs per day split it evenly.
-const BATCH_SIZE = Math.floor(parseInt(process.env.MAX_EMAILS_PER_RUN ?? "22") / 2);
+// MAX_EMAILS_PER_RUN is the daily cap. Two runs per day split it evenly
+// (40/day → 20 per run: morning 20, afternoon 20).
+const BATCH_SIZE = Math.floor(parseInt(process.env.MAX_EMAILS_PER_RUN ?? "40") / 2);
 
 function dedupeEmails(emails: string[]): string[] {
   const seen = new Set<string>();
@@ -31,6 +39,9 @@ async function runOutreachBatch(batchSize: number) {
 
   for (let i = 0; i < batch.length; i++) {
     const lead = batch[i];
+    const isLast = i === batch.length - 1;
+    const throttle = () =>
+      isLast ? Promise.resolve() : new Promise((res) => setTimeout(res, sendDelayMs()));
 
     if (!lead.company_description.trim()) {
       console.warn(`⚠️ No company description for ${lead.company_name} — skipping`);
@@ -53,7 +64,7 @@ async function runOutreachBatch(batchSize: number) {
     if (recipients.length === 0) {
       console.warn(`⚠️ No email found for ${lead.company_name} — skipping`);
       await updateLeadStatus(lead.rowIndex, "No email found");
-      await new Promise((res) => setTimeout(res, DELAY_MS));
+      await throttle();
       continue;
     }
 
@@ -96,7 +107,7 @@ async function runOutreachBatch(batchSize: number) {
       await updateLeadStatus(lead.rowIndex, `error: ${lastError.slice(0, 200)}`);
     }
 
-    await new Promise((res) => setTimeout(res, DELAY_MS));
+    await throttle();
   }
 
   console.log(`Run complete. Processed ${batch.length}/${leads.length} leads.`);
