@@ -4,6 +4,27 @@ import { generateEmail } from "../lib/email-gen";
 import { findWebsiteEmails } from "../lib/firecrawl";
 import { sendEmail } from "../lib/mailer";
 
+const REQUIRED_ENV_VARS = [
+  "GOOGLE_SERVICE_ACCOUNT_EMAIL",
+  "GOOGLE_PRIVATE_KEY",
+  "GOOGLE_SHEET_ID",
+  "OPENAI_API_KEY",
+  "SMTP_USER",
+  "SMTP_PASS",
+  "FIRECRAWL_API_KEY",
+];
+
+for (const v of REQUIRED_ENV_VARS) {
+  if (!process.env[v]) {
+    throw new Error(`Missing required env var: ${v}`);
+  }
+}
+
+const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+function isValidEmail(email: string): boolean {
+  return EMAIL_FORMAT_RE.test(email) && email.length <= 254;
+}
+
 const MAX_ATTEMPTS = 2;
 // Jittered delay between sends. Kept short enough that a full batch (plus
 // per-lead scrape + generation time) stays under the 15 min maxDuration, but
@@ -49,11 +70,11 @@ async function runOutreachBatch(batchSize: number) {
       continue;
     }
 
-    let recipients = dedupeEmails([lead.contact_email]);
+    let recipients = dedupeEmails([lead.contact_email]).filter(isValidEmail);
     try {
       const websiteEmails = await findWebsiteEmails(lead.company_domain);
       if (websiteEmails.length) {
-        recipients = dedupeEmails([...recipients, ...websiteEmails]);
+        recipients = dedupeEmails([...recipients, ...websiteEmails]).filter(isValidEmail);
         console.log(`🔎 ${lead.company_domain}: found ${websiteEmails.join(", ")}`);
       }
     } catch (err: unknown) {
@@ -113,18 +134,18 @@ async function runOutreachBatch(batchSize: number) {
   console.log(`Run complete. Processed ${batch.length}/${leads.length} leads.`);
 }
 
-// 9:00 AM IST (03:30 UTC) — first half of daily cap
+// 9:00 AM IST (03:30 UTC), Mon–Fri only — first half of daily cap
 export const morningOutreachJob = schedules.task({
   id: "auto-outreach-morning",
-  cron: "30 3 * * *",
+  cron: "30 3 * * 1-5",
   maxDuration: 900,
   run: () => runOutreachBatch(BATCH_SIZE),
 });
 
-// 11:00 AM IST (05:30 UTC) — second half of daily cap
+// 11:00 AM IST (05:30 UTC), Mon–Fri only — second half of daily cap
 export const afternoonOutreachJob = schedules.task({
   id: "auto-outreach-afternoon",
-  cron: "30 5 * * *",
+  cron: "30 5 * * 1-5",
   maxDuration: 900,
   run: () => runOutreachBatch(BATCH_SIZE),
 });

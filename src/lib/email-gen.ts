@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { buildEmailPrompt, assembleEmailBody, EmailParts } from "./prompt-template";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -12,42 +13,55 @@ interface EmailOutput {
   body: string;
 }
 
+const MAX_INPUT_LENGTH = 2000;
+const MAX_SUBJECT_LENGTH = 200;
+const MAX_BLOCK_LENGTH = 800;
+const HTML_TAG_RE = /<[^>]+>/g;
+
+function sanitizeInput(str: string): string {
+  return str
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    .slice(0, MAX_INPUT_LENGTH);
+}
+
+// Clean a single LLM-written field: strip control chars and HTML, cap length.
+function cleanField(str: string, maxLength: number): string {
+  return str
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    .replace(HTML_TAG_RE, "")
+    .trim()
+    .slice(0, maxLength);
+}
+
+// The LLM writes only Blocks 1 and 2 (intro, painPoint) plus the subject.
+function validateEmailParts(parsed: unknown): EmailParts {
+  const obj = parsed as Record<string, unknown>;
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    typeof obj.subject !== "string" ||
+    typeof obj.intro !== "string" ||
+    typeof obj.painPoint !== "string"
+  ) {
+    throw new Error("LLM output missing required subject/intro/painPoint string fields");
+  }
+
+  const subject = cleanField(obj.subject, MAX_SUBJECT_LENGTH);
+  const intro = cleanField(obj.intro, MAX_BLOCK_LENGTH);
+  const painPoint = cleanField(obj.painPoint, MAX_BLOCK_LENGTH);
+
+  if (!subject || !intro || !painPoint) {
+    throw new Error("LLM returned an empty subject, intro, or painPoint after sanitization");
+  }
+
+  return { subject, intro, painPoint };
+}
+
 export async function generateEmail(input: EmailInput): Promise<EmailOutput> {
-  const prompt = `You are writing a cold email in the style of Nick Saraev. Return ONLY valid JSON with keys "subject" and "body". No markdown, no explanation, just the JSON object.
+  const companyName = sanitizeInput(input.companyName);
+  const companyDescription = sanitizeInput(input.companyDescription);
 
-COMPANY: ${input.companyName}
-COMPANY DESCRIPTION: ${input.companyDescription}
-
-STRUCTURE (follow exactly):
-Subject: [Short subject based on the observation]
-
-Hi Team,
-
-[Specific observation from the company description]
-
-[Why that observation stood out]
-
-I spend a lot of time studying how growing businesses operate and where AI can support teams in practical, useful ways.
-
-Curious, [one question about a challenge they likely face based on the observation]?
-
-Open to a quick 15 to 20 min call sometime next week?
-
-Best,
-
-Aryaman
-
-RULES (non-negotiable):
-- Total word count must be between 80 and 120 words. Count carefully before outputting.
-- Always open with "Hi Team,"
-- Use ONLY information explicitly present in the company description. Do not invent or assume anything.
-- Pick ONE specific observation that genuinely stands out. Do not be vague.
-- Ask exactly ONE question. Ground it in the observation. It must relate to one of: growth, operations, delivery, scaling, client management, technology, or business challenges.
-- Do not use hyphens anywhere in the email.
-- Do not use corporate buzzwords (no leverage, synergy, streamline, empower, optimize, cutting-edge, or similar).
-- Do not pitch services. Do not promise results. Do not make assumptions.
-- Do not mention automation. Do not mention saving money.
-- Tone must be curious, conversational, and human. Not salesy.`;
+  const prompt = buildEmailPrompt(companyName, companyDescription);
 
   const response = await client.chat.completions.create({
     model: "gpt-4o-mini",
@@ -58,11 +72,15 @@ RULES (non-negotiable):
   const raw = response.choices[0].message.content?.trim() ?? "";
   const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
 
+  let parsed: unknown;
   try {
-    return JSON.parse(cleaned) as EmailOutput;
+    parsed = JSON.parse(cleaned);
   } catch {
     const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]) as EmailOutput;
-    throw new Error(`Failed to parse AI response as JSON: ${cleaned.slice(0, 200)}`);
+    if (!match) throw new Error(`Failed to parse AI response as JSON: ${cleaned.slice(0, 200)}`);
+    parsed = JSON.parse(match[0]);
   }
+
+  const parts = validateEmailParts(parsed);
+  return { subject: parts.subject, body: assembleEmailBody(parts) };
 }
