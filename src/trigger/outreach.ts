@@ -135,17 +135,19 @@ async function runOutreachBatch(batchSize: number) {
 }
 
 // 9:00 AM IST (03:30 UTC), Mon–Fri only — first half of daily cap
+// PAUSED: cron commented out to stop scheduled runs. Re-add `cron` and redeploy to resume.
 export const morningOutreachJob = schedules.task({
   id: "auto-outreach-morning",
-  cron: "30 3 * * 1-5",
+  // cron: "30 3 * * 1-5",
   maxDuration: 900,
   run: () => runOutreachBatch(BATCH_SIZE),
 });
 
 // 11:00 AM IST (05:30 UTC), Mon–Fri only — second half of daily cap
+// PAUSED: cron commented out to stop scheduled runs. Re-add `cron` and redeploy to resume.
 export const afternoonOutreachJob = schedules.task({
   id: "auto-outreach-afternoon",
-  cron: "30 5 * * 1-5",
+  // cron: "30 5 * * 1-5",
   maxDuration: 900,
   run: () => runOutreachBatch(BATCH_SIZE),
 });
